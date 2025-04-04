@@ -10,16 +10,18 @@ import os
 import sys 
 import cv2
 from PIL import Image
-sys.path.append("..") 
+# sys.path.append("..")
+sys.path.append("utils/")
 import utils_image as util
 import utils_logger
 import utils_deblur as deblur
-from network_unet import UNetRes as Net
+sys.path.append("utils/models/") 
+from models.network_unet import UNetRes as Net
 from tqdm import tqdm
 
 
     
-model_path = "DRUNet_color.pth"
+model_path = "models_ckpt/DRUNet_color.pth"
 n_channels = 3
 device = 'cuda:0'
 
@@ -88,7 +90,6 @@ class PnP(nn.Module):
         self.res['image'][i] = ToPILImage()(pre_i[0])
 
     def forward(self, kernel, initial_uv, f, clean, sigma=25.5, lamb=690, sigma2=1.0, denoisor_sigma=25,r=0): 
-        # model(kernel, initial_uv, img_L, img_H, sigma, lamb, sigma2, denoisor_level, 5, 1e-5)
         # init
         f *= 255
         u  = f
@@ -138,7 +139,7 @@ def plot_psnr(denoisor_level, lamb, sigma,r):
     sigma2 = 1.0
 
     fp = 'CBSD68_cut8/0004.png'
-    kernel_fp = 'kernels/levin_6.png'
+    kernel_fp = 'utils/kernels/levin_6.png'
     kernel = util.imread_uint(kernel_fp,1)
     kernel = util.single2tensor3(kernel).unsqueeze(0) / 255.
     kernel = kernel / torch.sum(kernel)
