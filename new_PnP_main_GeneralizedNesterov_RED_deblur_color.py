@@ -72,11 +72,11 @@ class PnP(nn.Module):
         '''
         Compute the PSNR, SSIM and save the image at the iteration i.
         '''
-        psnr = util.calculate_psnr_torch(u / 255., clean).item()
+        psnr = util.calculate_psnr_torch(u, clean).item()
         self.res['psnr'][i] = psnr
-        ssim = util.calculate_ssim_torch(u / 255., clean).item()
+        ssim = util.calculate_ssim_torch(u, clean).item()
         self.res['ssim'][i] = ssim
-        pre_i = torch.clamp(u / 255., 0., 1.)
+        pre_i = torch.clamp(u, 0., 1.)
         self.res['image'][i] = ToPILImage()(pre_i[0])
 
     def forward(self, initial_uv, obs, clean, kernel, sigma_obs, lamb=690, denoiser_sigma=25./255., r=3, stepsize = 0.02):
@@ -93,9 +93,8 @@ class PnP(nn.Module):
                 stepsize : the stepsize of the algorithm
         '''
         # init
-        obs *= 255
         u  = obs
-        average = obs
+        # average = obs
         K = kernel
 
         fft_k = deblur.p2o(K, u.shape[-2:])
@@ -104,22 +103,21 @@ class PnP(nn.Module):
 
         t = u
         y_denoised = u
-        x = u 
+        x = u
         y = u
 
         for k in tqdm(range(self.nb_itr)):
             oldx = x
-            self.get_psnr_i(torch.clamp(y_denoised, min = -0., max =255.), clean, k)
+            self.get_psnr_i(torch.clamp(y_denoised, min = -0., max =1.), clean, k)
 
             data_grad = abs_k * deblur.fftn(y) - fft_kH * deblur.fftn(obs)
             data_grad = torch.real(deblur.ifftn(data_grad))
 
-            t = y/255
-            t = t.type(torch.cuda.FloatTensor)
-            y_denoised = self.net.forward(t,denoiser_sigma) * 255
+            y = y.type(torch.cuda.FloatTensor)
+            y_denoised = self.net.forward(y,denoiser_sigma)
             reg_grad = y - y_denoised
 
-            grad = reg_grad + lamb*data_grad
+            grad = reg_grad + lamb *data_grad
 
             x = y - stepsize*grad
             if k+r==0:
@@ -180,9 +178,6 @@ def plot_psnr(denoiser_level, lamb, sigma_obs, r):
     plt.xlabel('iter')
     plt.ylabel('PSNR')
     plt.savefig('PSNR_level{}_lamb{}_r{}_RED_GeneralizedNesterov.png'.format(denoiser_level, lamb,r))
-
-
-
 
 
 
