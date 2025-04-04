@@ -40,6 +40,8 @@ parser.add_argument('--stepsize', type=float, default=0.02, help = "Stepsize of 
 parser.add_argument('--theta', type=float, default=0.9, help = "Momentum parameter")
 parser.add_argument('--dont_save_images', dest='dont_save_images', action='store_true')
 parser.set_defaults(dont_save_images=False)
+parser.add_argument('--save_each_itr', dest='save_each_itr', action='store_true')
+parser.set_defaults(save_each_itr=False)
 hparams = parser.parse_args()
 
 model_path = hparams.model_path
@@ -193,6 +195,7 @@ momentum = hparams.momentum
 restarting_su = hparams.restarting_su
 stepsize = hparams.stepsize
 dont_save_images = hparams.dont_save_images
+save_each_itr = hparams.save_each_itr
 
 model = PnP()
 model.to(device)
@@ -239,10 +242,11 @@ for i, clean_image_path in enumerate(input_paths):
     os.makedirs(savepth, exist_ok = True)
 
     if not(dont_save_images):
-        savepth_img = savepth+"/set_img_{}/".format(i)
-        os.makedirs(savepth_img, exist_ok = True)
-        for j in range(len(model.res['image'])):
-            model.res['image'][j].save(savepth_img + 'iterations_{}.png'.format(j))
+        if save_each_itr:
+            savepth_img = savepth+"/set_img_{}/".format(i)
+            os.makedirs(savepth_img, exist_ok = True)
+            for j in range(len(model.res['image'])):
+                model.res['image'][j].save(savepth_img + 'iterations_{}.png'.format(j))
         
         model.res['image'][-1].save(savepth + '/restored_img.png')
         clean_img_uint = util.tensor2uint(clean_image)
