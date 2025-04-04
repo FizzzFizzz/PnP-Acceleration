@@ -7,8 +7,8 @@ from torchvision.transforms import ToPILImage
 from tqdm import tqdm
 import logging
 import os
+from natsort import os_sorted
 import sys 
-import cv2
 from PIL import Image
 # sys.path.append("..")
 sys.path.append("utils/")
@@ -30,6 +30,7 @@ parser.add_argument('--r', type=int, default=3, help = "Parameter for the Genera
 parser.add_argument('--lamb', type=float, default=18, help = "Regularization parameter")
 parser.add_argument('--denoiser_level', type=float, default=0.1, help = "Denoiser level in [0.,1.]")
 parser.add_argument('--sigma_obs', type=float, default=12.75, help = "Standard variation of the noise in the observation in [0.,255.]")
+parser.add_argument('--dataset_name', type=str, default='set1', help = "Name of the dataset of image to restore")
 hparams = parser.parse_args()
 
 model_path = hparams.model_path
@@ -150,14 +151,25 @@ def gen_data(clean_image, sigma, kernel, seed=0):
     observation = observation_without_noise + noise
     return observation
 
-def plot_psnr(denoiser_level, lamb, sigma_obs, r, momentum):
-    model = PnP()
-    model.to(device)
-    model.net.to(device)
-    model.eval()
-    model.net.eval()
 
-    clean_image_path = 'CBSD68_cut8/0004.png'
+# Parameters setting
+denoiser_level = hparams.denoiser_level
+lamb = hparams.lamb
+sigma_obs = hparams.sigma_obs
+r = hparams.r
+momentum = not(hparams.no_momentum)
+
+model = PnP()
+model.to(device)
+model.net.to(device)
+model.eval()
+model.net.eval()
+
+# Set input image paths
+input_path = os.path.join('datasets', hparams.dataset_name)
+input_paths = os_sorted([os.path.join(input_path,p) for p in os.listdir(input_path)])
+
+for i, clean_image_path in enumerate(input_paths):
     kernel_path = 'utils/kernels/levin_6.png'
     kernel = util.imread_uint(kernel_path,1)
     kernel = util.single2tensor3(kernel).unsqueeze(0) / 255.
@@ -171,14 +183,15 @@ def plot_psnr(denoiser_level, lamb, sigma_obs, r, momentum):
     clean_image = clean_image.to(device)
     kernel = kernel.to(device)
 
+    # Run RED algorithm with or without Nesterov momentum
     with torch.no_grad():
         model(initial_uv, observation, clean_image, kernel, sigma_obs, lamb, denoiser_level, r, momentum)
 
     if momentum:
-        savepth = 'results/images_GNesterov_RED_r{}'.format(r)+'/'
+        savepth = 'results/'+hparams.dataset_name+"/images_GNesterov_RED_r_{}/img_{}/".format(r,i)
         os.makedirs(savepth, exist_ok = True)
     else:
-        savepth = 'results/images_RED/'
+        savepth = 'results/'+hparams.dataset_name+"/images_RED/img_{}/".format(i)
         os.makedirs(savepth, exist_ok = True)
     for j in range(len(model.res['image'])):
         model.res['image'][j].save(savepth + 'result_{}.png'.format(j))
@@ -186,14 +199,11 @@ def plot_psnr(denoiser_level, lamb, sigma_obs, r, momentum):
     y = model.res['psnr']
     print("Restored image PSNR = {:.2f}".format(y[-1]))
     x = range(len(y))
+    plt.clf()
     plt.plot(x, y, '-', alpha=0.8, linewidth=1.5)
     plt.xlabel('iter')
     plt.ylabel('PSNR')
     if momentum:
-        plt.savefig('results/PSNR_level_{}_lamb{}_r{}_RED_GeneralizedNesterov.png'.format(denoiser_level, lamb,r))
+        plt.savefig('results/'+hparams.dataset_name+'/PSNR_level_{}_lamb{}_r{}_RED_GeneralizedNesterov_img_{}.png'.format(denoiser_level, lamb,r, i))
     else:
-        plt.savefig('results/PSNR_level_{}_lamb{}_RED.png'.format(denoiser_level, lamb,r))
-
-
-# Run RED algorithm with or without Nesterov momentum
-plot_psnr(denoiser_level = hparams.denoiser_level, lamb = hparams.lamb, sigma_obs = hparams.sigma_obs, r = hparams.r, momentum = not(hparams.no_momentum))
+        plt.savefig('results/'+hparams.dataset_name+'/PSNR_level_{}_lamb{}_RED_img_{}.png'.format(denoiser_level, lamb, r, i))
