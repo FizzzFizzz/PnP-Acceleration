@@ -24,13 +24,17 @@ parser = ArgumentParser()
 parser.add_argument('--model_path', type=str, default="models_ckpt/DRUNet_color.pth", help = "The path for the DRUNet pretrained weights")
 parser.add_argument('--n_channels', type=int, default=3, help = "number of channels of the image, by default RGB")
 parser.add_argument('--gpu_number', type=int, default=0, help = "the GPU number")
-parser.add_argument('--no_momentum', dest='no_momentum', action='store_true')
-parser.set_defaults(early_stopping=False)
+parser.add_argument('--momentum_Nesterov', dest='momentum_Nesterov', action='store_true')
+parser.set_defaults(momentum_Nesterov=False)
+parser.add_argument('--restarting_su', dest='restarting_su', action='store_true')
+parser.set_defaults(restarting_su=False)
 parser.add_argument('--r', type=int, default=3, help = "Parameter for the Generalized Nesterov momentum")
 parser.add_argument('--lamb', type=float, default=18, help = "Regularization parameter")
 parser.add_argument('--denoiser_level', type=float, default=0.1, help = "Denoiser level in [0.,1.]")
 parser.add_argument('--sigma_obs', type=float, default=12.75, help = "Standard variation of the noise in the observation in [0.,255.]")
 parser.add_argument('--dataset_name', type=str, default='set1', help = "Name of the dataset of image to restore")
+parser.add_argument('--kernel_name', type=str, default='levin_6.png', help = "Name of the kernel of blur")
+parser.add_argument('--stepsize', type=float, default=0.02, help = "Stepsize of the gradient descent algorithm")
 hparams = parser.parse_args()
 
 model_path = hparams.model_path
@@ -74,6 +78,7 @@ class PnP(nn.Module):
         self.res['psnr'] = [0] * nb_itr
         self.res['ssim'] = [0] * nb_itr
         self.res['image'] = [0]* nb_itr
+        self.nb_restart_activ = 0
 
     def get_psnr_i(self, u, clean, i):
         '''
@@ -86,7 +91,7 @@ class PnP(nn.Module):
         pre_i = torch.clamp(u, 0., 1.)
         self.res['image'][i] = ToPILImage()(pre_i[0])
 
-    def forward(self, initial_uv, obs, clean, kernel, sigma_obs, lamb=690, denoiser_sigma=25./255., r=3, momentum = True, stepsize = 0.02):
+    def forward(self, initial_uv, obs, clean, kernel, sigma_obs, lamb=690, denoiser_sigma=25./255., r=3, momentum_Nesterov = False, restarting_su = False, stepsize = 0.02):
         '''
             Computed the Generalized Nesterov Algorithm with
                 initial_uv : the initialization for the algorithm
@@ -107,13 +112,18 @@ class PnP(nn.Module):
         fft_kH = torch.conj(fft_k)
         abs_k = fft_kH * fft_k
 
-        t = u
         y_denoised = u
         x = u
         y = u
 
+        if restarting_su:
+            # Restarting creterion proposed by "A Differential Equation for Modeling Nesterov’s Accelerated Gradient Method: Theory and Insights" section 5
+            restart_crit_su = -float('inf') 
+            j = 1
+            k_min = 5
+
         for k in tqdm(range(self.nb_itr)):
-            oldx = x
+            x_old = x
             self.get_psnr_i(torch.clamp(y_denoised, min = -0., max =1.), clean, k)
 
             data_grad = abs_k * deblur.fftn(y) - fft_kH * deblur.fftn(obs)
@@ -126,11 +136,22 @@ class PnP(nn.Module):
             grad = reg_grad + lamb *data_grad
 
             x = y - stepsize*grad
-            if momentum:
-                if k+r==0:
-                    y = x + (x-oldx)
+            if restarting_su:
+                restart_crit_su_old = restart_crit_su
+                restart_crit_su = torch.mean(torch.abs(x-x_old)).item()
+                if (k>k_min) and (restart_crit_su<restart_crit_su_old):
+                    j = 1
+                    self.nb_restart_activ += 1
                 else:
-                    y = x + (k)/(k+r)*(x-oldx)
+                    j += 1
+            else:
+                j = k
+
+            if momentum_Nesterov:
+                if k+r==0:
+                    y = x + (x-x_old)
+                else:
+                    y = x + j/(j+r)*(x-x_old)
             else:
                 y = x
         return y_denoised
@@ -157,7 +178,9 @@ denoiser_level = hparams.denoiser_level
 lamb = hparams.lamb
 sigma_obs = hparams.sigma_obs
 r = hparams.r
-momentum = not(hparams.no_momentum)
+momentum_Nesterov = hparams.momentum_Nesterov
+restarting_su = hparams.restarting_su
+stepsize = hparams.stepsize
 
 model = PnP()
 model.to(device)
@@ -170,7 +193,7 @@ input_path = os.path.join('datasets', hparams.dataset_name)
 input_paths = os_sorted([os.path.join(input_path,p) for p in os.listdir(input_path)])
 
 for i, clean_image_path in enumerate(input_paths):
-    kernel_path = 'utils/kernels/levin_6.png'
+    kernel_path = 'utils/kernels/'+hparams.kernel_name
     kernel = util.imread_uint(kernel_path,1)
     kernel = util.single2tensor3(kernel).unsqueeze(0) / 255.
     kernel = kernel / torch.sum(kernel)
@@ -185,9 +208,9 @@ for i, clean_image_path in enumerate(input_paths):
 
     # Run RED algorithm with or without Nesterov momentum
     with torch.no_grad():
-        model(initial_uv, observation, clean_image, kernel, sigma_obs, lamb, denoiser_level, r, momentum)
+        model(initial_uv, observation, clean_image, kernel, sigma_obs, lamb, denoiser_level, r, momentum_Nesterov, restarting_su, stepsize)
 
-    if momentum:
+    if momentum_Nesterov:
         savepth = 'results/'+hparams.dataset_name+"/images_GNesterov_RED_r_{}/img_{}/".format(r,i)
         os.makedirs(savepth, exist_ok = True)
     else:
@@ -196,14 +219,40 @@ for i, clean_image_path in enumerate(input_paths):
     for j in range(len(model.res['image'])):
         model.res['image'][j].save(savepth + 'result_{}.png'.format(j))
 
-    y = model.res['psnr']
-    print("Restored image PSNR = {:.2f}".format(y[-1]))
-    x = range(len(y))
+    psnr_list = model.res['psnr']
+    ssim_list = model.res['ssim']
+    print("Restored image PSNR = {:.2f}".format(psnr_list[-1]))
+    if restarting_su:
+        print("Number of restarting activation = {}".format(model.nb_restart_activ))
+    itr_list = range(len(psnr_list))
     plt.clf()
-    plt.plot(x, y, '-', alpha=0.8, linewidth=1.5)
+    plt.plot(itr_list, psnr_list, '-', alpha=0.8, linewidth=1.5)
     plt.xlabel('iter')
     plt.ylabel('PSNR')
-    if momentum:
-        plt.savefig('results/'+hparams.dataset_name+'/PSNR_level_{}_lamb{}_r{}_RED_GeneralizedNesterov_img_{}.png'.format(denoiser_level, lamb,r, i))
+    if momentum_Nesterov:
+        plt.savefig('results/'+hparams.dataset_name+'/PSNR_level_{}_lamb{}_r{}_RED_GeneralizedNesterov_img_{}.png'.format(denoiser_level, lamb, r, i))
     else:
         plt.savefig('results/'+hparams.dataset_name+'/PSNR_level_{}_lamb{}_RED_img_{}.png'.format(denoiser_level, lamb, r, i))
+    
+    dict = {
+            'clean_image' : clean_image,
+            'observation' : observation,
+            'initial_uv' : initial_uv,
+            'kernel' : kernel,
+            'sigma_obs' : sigma_obs,
+            'lamb' : lamb,
+            'denoiser_level' : denoiser_level,
+            'r' : r,
+            'momentum_Nesterov' : momentum_Nesterov,
+            'restarting_su' : restarting_su,
+            'stack_images' : model.res['image'],
+            'clean_image_path' : clean_image_path,
+            'kernel_path' : kernel_path,
+            'psnr_list' : psnr_list,
+            'ssim_list' : ssim_list,
+            'psnr_restored' : psnr_list[-1],
+            'ssim_restored' : ssim_list[-1],
+            'restored' : model.res['image'][j],
+            'nb_restart_activ' : model.nb_restart_activ,
+        }
+    np.save('results/'+hparams.dataset_name+"/dict_{}_results".format(i), dict)
