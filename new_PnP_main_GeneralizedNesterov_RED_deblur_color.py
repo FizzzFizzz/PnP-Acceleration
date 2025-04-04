@@ -79,7 +79,19 @@ class PnP(nn.Module):
         pre_i = torch.clamp(u / 255., 0., 1.)
         self.res['image'][i] = ToPILImage()(pre_i[0])
 
-    def forward(self, kernel, initial_uv, obs, clean, sigma_obs=25.5, lamb=690, sigma2=1.0, denoiser_sigma=25, r=0): 
+    def forward(self, initial_uv, obs, clean, kernel, sigma_obs, lamb=690, denoiser_sigma=25./255., r=3, stepsize = 0.02):
+        '''
+            Computed the Generalized Nesterov Algorithm with
+                initial_uv : the initialization for the algorithm
+                obs : the observation, degraded image
+                clean : the clean image to compute the metrics at each iterations
+                kernel : the kernel of blur
+                sigma_obs : the noise level of the observation
+                lamb : the regularization parameter, multiplicative factor in front of the data-fidelity
+                denoiser_sigma : the noise parameter of the denoiser
+                r : the parameter of the Generalized Nesterov momentum, r = 3, we recover the classic Nesterov momentum
+                stepsize : the stepsize of the algorithm
+        '''
         # init
         obs *= 255
         u  = obs
@@ -90,31 +102,31 @@ class PnP(nn.Module):
         fft_kH = torch.conj(fft_k)
         abs_k = fft_kH * fft_k
 
-        lamb_ = lamb
         t = u
-        w = u
+        y_denoised = u
         x = u 
         y = u
 
         for k in tqdm(range(self.nb_itr)):
             oldx = x
-            self.get_psnr_i(torch.clamp(w, min = -0., max =255.), clean, k)
+            self.get_psnr_i(torch.clamp(y_denoised, min = -0., max =255.), clean, k)
 
-            temp = abs_k * deblur.fftn(y) - fft_kH * deblur.fftn(obs)
-            temp = torch.real(deblur.ifftn(temp))
+            data_grad = abs_k * deblur.fftn(y) - fft_kH * deblur.fftn(obs)
+            data_grad = torch.real(deblur.ifftn(data_grad))
 
             t = y/255
             t = t.type(torch.cuda.FloatTensor)
-            w = self.net.forward(t,denoiser_sigma) * 255
+            y_denoised = self.net.forward(t,denoiser_sigma) * 255
+            reg_grad = y - y_denoised
 
-            G =  y - w + lamb_*( temp ) 
+            grad = reg_grad + lamb*data_grad
 
-            x = y - 0.02*G
+            x = y - stepsize*grad
             if k+r==0:
                 y = x + (x-oldx)
             else:
                 y = x + (k)/(k+r)*(x-oldx)
-        return w
+        return y_denoised
 
 def gen_data(clean_image, sigma, kernel, seed=0):
     """
@@ -138,8 +150,6 @@ def plot_psnr(denoiser_level, lamb, sigma_obs, r):
     model.net.to(device)
     model.eval()
     model.net.eval()
-    
-    sigma2 = 1.0
 
     clean_image_path = 'CBSD68_cut8/0004.png'
     kernel_path = 'utils/kernels/levin_6.png'
@@ -156,7 +166,7 @@ def plot_psnr(denoiser_level, lamb, sigma_obs, r):
     kernel = kernel.to(device)
 
     with torch.no_grad():
-        model(kernel, initial_uv, observation, clean_image, sigma_obs, lamb, sigma2, denoiser_level, r)
+        model(initial_uv, observation, clean_image, kernel, sigma_obs, lamb, denoiser_level, r)
 
     savepth = 'images_GNesterov_RED_r{}'.format(r)+'/'
     for j in range(len(model.res['image'])):
@@ -178,3 +188,4 @@ def plot_psnr(denoiser_level, lamb, sigma_obs, r):
 
 ## RED 
 plot_psnr(denoiser_level = 0.1, lamb = 18, sigma_obs = 12.75, r = 4)
+
