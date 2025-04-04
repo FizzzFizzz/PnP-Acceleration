@@ -30,7 +30,10 @@ parser.add_argument('--momentum', dest='momentum', action='store_true')
 parser.set_defaults(momentum=False)
 parser.add_argument('--restarting_su', dest='restarting_su', action='store_true')
 parser.set_defaults(restarting_su=False)
+parser.add_argument('--restarting_li', dest='restarting_li', action='store_true')
+parser.set_defaults(restarting_li=False)
 parser.add_argument('--r', type=int, default=3, help = "Parameter for the Generalized Nesterov momentum")
+parser.add_argument('--B', type=float, default=5000., help = "Parameter restarting criterion proposed by Li")
 parser.add_argument('--lamb', type=float, default=18, help = "Regularization parameter")
 parser.add_argument('--denoiser_level', type=float, default=0.1, help = "Denoiser level in [0.,1.]")
 parser.add_argument('--sigma_obs', type=float, default=12.75, help = "Standard variation of the noise in the observation in [0.,255.]")
@@ -98,7 +101,7 @@ class PnP(nn.Module):
         pre_i = torch.clamp(u, 0., 1.)
         self.res['image'][i] = ToPILImage()(pre_i[0])
 
-    def forward(self, initial_uv, obs, clean, kernel, sigma_obs, lamb=690, denoiser_sigma=25./255., theta = 0.9, r=3, Nesterov = False, momentum = False, restarting_su = False, stepsize = 0.02):
+    def forward(self, initial_uv, obs, clean, kernel, sigma_obs, lamb=690, denoiser_sigma=25./255., theta = 0.9, r=3, B = 5000., Nesterov = False, momentum = False, restarting_su = False, restarting_li = False, stepsize = 0.02):
         '''
             Computed the RED Algorithm with
                 initial_uv : the initialization for the algorithm
@@ -108,7 +111,13 @@ class PnP(nn.Module):
                 sigma_obs : the noise level of the observation
                 lamb : the regularization parameter, multiplicative factor in front of the data-fidelity
                 denoiser_sigma : the noise parameter of the denoiser
+                theta : momentum parameter for fixed momentum
                 r : the parameter of the Generalized Nesterov momentum, r = 3, we recover the classic Nesterov momentum
+                B : parameter for the Li restarting criterion
+                Nesterov : boolean which gives if the Generalize Nesterov momentum is used
+                momentum : boolean which gives if fixed momentum is used
+                restarting_su : boolean which gives if the restarting criterion of Su is used (for Generalize momentum)
+                restarting_li : boolean which gives if the restarting criterion of Li is used (for fixed momentum)
                 stepsize : the stepsize of the algorithm
         '''
         # init
@@ -124,10 +133,14 @@ class PnP(nn.Module):
         y = u
 
         if restarting_su:
-            # Restarting creterion proposed by "A Differential Equation for Modeling Nesterov’s Accelerated Gradient Method: Theory and Insights" section 5
+            # Restarting criterion proposed by "A Differential Equation for Modeling Nesterov’s Accelerated Gradient Method: Theory and Insights" section 5
             restart_crit_su = -float('inf') 
             j = 0
             k_min = 5
+        if restarting_li:
+            #Restarting criterion proposed by "Restarted Nonconvex Accelerated Gradient Descent: No More Polylogarithmic Factor in the O( 7 4) Complexity"
+            restart_crit_li = 0
+            j = 0
 
         for k in tqdm(range(self.nb_itr)):
             x_old = x
@@ -140,7 +153,7 @@ class PnP(nn.Module):
             y_denoised = self.net.forward(y,denoiser_sigma)
             reg_grad = y - y_denoised
 
-            grad = reg_grad + lamb *data_grad
+            grad = reg_grad + lamb * data_grad
 
             x = y - stepsize*grad
             if restarting_su:
@@ -148,6 +161,14 @@ class PnP(nn.Module):
                 restart_crit_su = torch.mean(torch.abs(x-x_old)).item()
                 if (k>k_min) and (restart_crit_su<restart_crit_su_old):
                     j = 0
+                    self.nb_restart_activ += 1
+                else:
+                    j += 1
+            elif restarting_li:
+                restart_crit_li = restart_crit_li + torch.sum((x-x_old)**2).item()
+                if j * restart_crit_li > B:
+                    j = 0
+                    x_old = x
                     self.nb_restart_activ += 1
                 else:
                     j += 1
@@ -189,10 +210,12 @@ denoiser_level = hparams.denoiser_level
 lamb = hparams.lamb
 sigma_obs = hparams.sigma_obs
 r = hparams.r
+B = hparams.B
 theta = hparams.theta
 Nesterov = hparams.Nesterov
 momentum = hparams.momentum
 restarting_su = hparams.restarting_su
+restarting_li = hparams.restarting_li
 stepsize = hparams.stepsize
 dont_save_images = hparams.dont_save_images
 save_each_itr = hparams.save_each_itr
@@ -223,12 +246,12 @@ for i, clean_image_path in enumerate(input_paths):
 
     # Run RED algorithm with or without Nesterov momentum
     with torch.no_grad():
-        model(initial_uv, observation, clean_image, kernel, sigma_obs, lamb, denoiser_level, theta, r, Nesterov, momentum, restarting_su, stepsize)
+        model(initial_uv, observation, clean_image, kernel, sigma_obs, lamb, denoiser_level, theta, r, B, Nesterov, momentum, restarting_su, restarting_li, stepsize)
 
     psnr_list = model.res['psnr']
     ssim_list = model.res['ssim']
     print("Restored image PSNR = {:.2f}".format(psnr_list[-1]))
-    if restarting_su:
+    if restarting_su or restarting_li:
         print("Number of restarting activation = {}".format(model.nb_restart_activ))
     
 
@@ -236,7 +259,7 @@ for i, clean_image_path in enumerate(input_paths):
     if Nesterov:
         savepth = savepth + "_Nesterov_r_{}".format(r)
     elif momentum:
-        savepth = savepth + "_Heavy_ball_theta_{}".format(theta)
+        savepth = savepth + "_Momentum_theta_{}".format(theta)
     if restarting_su:
         savepth = savepth + "restarting_su"
     os.makedirs(savepth, exist_ok = True)
