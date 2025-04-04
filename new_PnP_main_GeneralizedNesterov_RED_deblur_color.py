@@ -68,14 +68,6 @@ class PnP(nn.Module):
         self.res['ssim'] = [0] * nb_itr
         self.res['image'] = [0]* nb_itr
 
-    # def IRL1(self, f, u, v, b2, sigma, lamb, sigma2, k=10, eps=1e-5):
-    #     for j in range(k):
-    #         fenzi = lamb * (v-f)/(sigma**2+(v-f)**2)+(v-u-b2)
-    #         fenmu = lamb * (sigma**2-(v-f)**2)/(sigma**2+(v-f)**2)**2+1
-    #         v = v - fenzi / fenmu
-    #         v = torch.clamp(v, min=0, max=255.)
-    #     return v
-
     def get_psnr_i(self, u, clean, i):
         '''
         Compute the PSNR, SSIM and save the image at the iteration i.
@@ -87,7 +79,7 @@ class PnP(nn.Module):
         pre_i = torch.clamp(u / 255., 0., 1.)
         self.res['image'][i] = ToPILImage()(pre_i[0])
 
-    def forward(self, kernel, initial_uv, obs, clean, sigma_obs=25.5, lamb=690, sigma2=1.0, denoisor_sigma=25, r=0): 
+    def forward(self, kernel, initial_uv, obs, clean, sigma_obs=25.5, lamb=690, sigma2=1.0, denoiser_sigma=25, r=0): 
         # init
         obs *= 255
         u  = obs
@@ -99,7 +91,6 @@ class PnP(nn.Module):
         abs_k = fft_kH * fft_k
 
         lamb_ = lamb
-        d = denoisor_sigma
         t = u
         w = u
         x = u 
@@ -114,7 +105,7 @@ class PnP(nn.Module):
 
             t = y/255
             t = t.type(torch.cuda.FloatTensor)
-            w = self.net.forward(t,d) * 255
+            w = self.net.forward(t,denoiser_sigma) * 255
 
             G =  y - w + lamb_*( temp ) 
 
