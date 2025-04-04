@@ -77,16 +77,14 @@ class PnP(nn.Module):
         return v
 
     def get_psnr_i(self, u, clean, i):
-        pre_i = torch.clamp(u / 255., 0., 1.)
-        img_E = util.tensor2uint(pre_i)
-        img_H = util.tensor2uint(clean)
-        psnr = util.calculate_psnr(img_E, img_H, border=0)
-        # print(psnr)
-        ssim = util.calculate_ssim(img_E, img_H, border=0)
+        '''
+        Compute the PSNR, SSIM and save the image at the iteration i.
+        '''
+        psnr = util.calculate_psnr_torch(u / 255., clean).item()
         self.res['psnr'][i] = psnr
+        ssim = util.calculate_ssim_torch(u / 255., clean).item()
         self.res['ssim'][i] = ssim
-        #if i > 0:
-        #    if self.res['psnr'][i] == max(self.res['psnr']):
+        pre_i = torch.clamp(u / 255., 0., 1.)
         self.res['image'][i] = ToPILImage()(pre_i[0])
 
     def forward(self, kernel, initial_uv, f, clean, sigma=25.5, lamb=690, sigma2=1.0, denoisor_sigma=25,r=0): 
@@ -125,9 +123,9 @@ class PnP(nn.Module):
                 y = x + (x-oldx)
             else:
                 y = x + (k)/(k+r)*(x-oldx)
-        return w # GD
+        return w
 
-def plot_psnr(denoisor_level, lamb, sigma,r):
+def plot_psnr(denoiser_level, lamb, sigma,r):
     device = 'cuda'
     model = PnP()
     model.to(device)
@@ -138,26 +136,23 @@ def plot_psnr(denoisor_level, lamb, sigma,r):
     # i = 4
     sigma2 = 1.0
 
-    fp = 'CBSD68_cut8/0004.png'
+    clean_image_path = 'CBSD68_cut8/0004.png'
     kernel_fp = 'utils/kernels/levin_6.png'
     kernel = util.imread_uint(kernel_fp,1)
     kernel = util.single2tensor3(kernel).unsqueeze(0) / 255.
     kernel = kernel / torch.sum(kernel)
-    img_H = util.imread_uint(fp, 3)
-    img_H = util.single2tensor3(img_H).unsqueeze(0) /255.
-    initial_uv, img_L, img_H = gen_data(img_H, sigma,kernel)
+    clean_image = util.imread_uint(clean_image_path, 3)
+    clean_image = util.single2tensor3(clean_image).unsqueeze(0) /255.
+    initial_uv, img_L, clean_image = gen_data(clean_image, sigma, kernel)
     
 
     initial_uv = initial_uv.to(device)
     img_L = img_L.to(device)
-    img_H = img_H.to(device)
+    clean_image = clean_image.to(device)
     kernel = kernel.to(device)
 
     with torch.no_grad():
-        img_L, img_H = img_L.to(device), img_H.to(device)
-        kernel = kernel.to(device)
-        # model(img_L, img_H, sigma, lamb, sigma2, denoisor_level, 10, 1e-5)
-        model(kernel, initial_uv, img_L, img_H, sigma, lamb, sigma2, denoisor_level,r)
+        model(kernel, initial_uv, img_L, clean_image, sigma, lamb, sigma2, denoiser_level,r)
 
     savepth = 'images_GNesterov_RED_r{}'.format(r)+'/'
     for j in range(len(model.res['image'])):
@@ -165,20 +160,17 @@ def plot_psnr(denoisor_level, lamb, sigma,r):
         model.res['image'][j].save(savepth + 'result_{}.png'.format(j))
 
     y = model.res['psnr']
-    # print(y)
     print("Restored image PSNR = {:.2f}".format(y[-1]))
     x = range(len(y))
     plt.plot(x, y, '-', alpha=0.8, linewidth=1.5)
-    # plt.legend(loc="upper right")
     plt.xlabel('iter')
     plt.ylabel('PSNR')
-    # plt.show()
-    plt.savefig('PSNR_level{}_lamb{}_r{}_RED_GeneralizedNesterov.png'.format(denoisor_level, lamb,r))
+    plt.savefig('PSNR_level{}_lamb{}_r{}_RED_GeneralizedNesterov.png'.format(denoiser_level, lamb,r))
 
 
 
 def gen_data(img_clean_uint8, sigma, kernel):
-    img_H = img_clean_uint8
+    clean_image = img_clean_uint8
     img_L = img_clean_uint8
     fft_k = deblur.p2o(kernel, img_L.shape[-2:])
     temp = fft_k * deblur.fftn(img_L)
@@ -192,8 +184,8 @@ def gen_data(img_clean_uint8, sigma, kernel):
     img_L += noise
 
     initial_uv = img_L
-    return initial_uv, img_L, img_H
+    return initial_uv, img_L, clean_image
 
 
 ## RED 
-plot_psnr(denoisor_level = 0.1, lamb = 18, sigma = 12.75, r = 4)
+plot_psnr(denoiser_level = 0.1, lamb = 18, sigma = 12.75, r = 4)
