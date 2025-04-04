@@ -175,11 +175,12 @@ def plot_psnr(denoiser_level, lamb, sigma_obs, r, momentum):
         model(initial_uv, observation, clean_image, kernel, sigma_obs, lamb, denoiser_level, r, momentum)
 
     if momentum:
-        savepth = 'images_GNesterov_RED_r{}'.format(r)+'/'
+        savepth = 'results/images_GNesterov_RED_r{}'.format(r)+'/'
+        os.makedirs(savepth, exist_ok = True)
     else:
-        savepth = 'images_RED/'
+        savepth = 'results/images_RED/'
+        os.makedirs(savepth, exist_ok = True)
     for j in range(len(model.res['image'])):
-        # model.res['image'][j].save(savepth + 'result_Brain{}_{}.png'.format(i, j))
         model.res['image'][j].save(savepth + 'result_{}.png'.format(j))
 
     y = model.res['psnr']
@@ -189,9 +190,9 @@ def plot_psnr(denoiser_level, lamb, sigma_obs, r, momentum):
     plt.xlabel('iter')
     plt.ylabel('PSNR')
     if momentum:
-        plt.savefig('PSNR_level_{}_lamb{}_r{}_RED_GeneralizedNesterov.png'.format(denoiser_level, lamb,r))
+        plt.savefig('results/PSNR_level_{}_lamb{}_r{}_RED_GeneralizedNesterov.png'.format(denoiser_level, lamb,r))
     else:
-        plt.savefig('PSNR_level_{}_lamb{}_RED.png'.format(denoiser_level, lamb,r))
+        plt.savefig('results/PSNR_level_{}_lamb{}_RED.png'.format(denoiser_level, lamb,r))
 
 
 # Run RED algorithm with or without Nesterov momentum
