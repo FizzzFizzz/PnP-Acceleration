@@ -1,4 +1,4 @@
-for i in 15
+for i in 4
 do 
-    python new_PnP_main_GeneralizedNesterov_RED_deblur_color.py --r $i --dataset_name "set1" --momentum_Nesterov --dont_save_images
+    python RED_GNesterov.py --r $i --dataset_name "set1" --Nesterov
 done

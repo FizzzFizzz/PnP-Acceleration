@@ -24,8 +24,10 @@ parser = ArgumentParser()
 parser.add_argument('--model_path', type=str, default="models_ckpt/DRUNet_color.pth", help = "The path for the DRUNet pretrained weights")
 parser.add_argument('--n_channels', type=int, default=3, help = "number of channels of the image, by default RGB")
 parser.add_argument('--gpu_number', type=int, default=0, help = "the GPU number")
-parser.add_argument('--momentum_Nesterov', dest='momentum_Nesterov', action='store_true')
-parser.set_defaults(momentum_Nesterov=False)
+parser.add_argument('--Nesterov', dest='Nesterov', action='store_true')
+parser.set_defaults(Nesterov=False)
+parser.add_argument('--momentum', dest='momentum', action='store_true')
+parser.set_defaults(momentum=False)
 parser.add_argument('--restarting_su', dest='restarting_su', action='store_true')
 parser.set_defaults(restarting_su=False)
 parser.add_argument('--r', type=int, default=3, help = "Parameter for the Generalized Nesterov momentum")
@@ -35,6 +37,7 @@ parser.add_argument('--sigma_obs', type=float, default=12.75, help = "Standard v
 parser.add_argument('--dataset_name', type=str, default='set1', help = "Name of the dataset of image to restore")
 parser.add_argument('--kernel_name', type=str, default='levin_6.png', help = "Name of the kernel of blur")
 parser.add_argument('--stepsize', type=float, default=0.02, help = "Stepsize of the gradient descent algorithm")
+parser.add_argument('--theta', type=float, default=0.9, help = "Momentum parameter")
 parser.add_argument('--dont_save_images', dest='dont_save_images', action='store_true')
 parser.set_defaults(dont_save_images=False)
 hparams = parser.parse_args()
@@ -93,9 +96,9 @@ class PnP(nn.Module):
         pre_i = torch.clamp(u, 0., 1.)
         self.res['image'][i] = ToPILImage()(pre_i[0])
 
-    def forward(self, initial_uv, obs, clean, kernel, sigma_obs, lamb=690, denoiser_sigma=25./255., r=3, momentum_Nesterov = False, restarting_su = False, stepsize = 0.02):
+    def forward(self, initial_uv, obs, clean, kernel, sigma_obs, lamb=690, denoiser_sigma=25./255., theta = 0.9, r=3, Nesterov = False, momentum = False, restarting_su = False, stepsize = 0.02):
         '''
-            Computed the Generalized Nesterov Algorithm with
+            Computed the RED Algorithm with
                 initial_uv : the initialization for the algorithm
                 obs : the observation, degraded image
                 clean : the clean image to compute the metrics at each iterations
@@ -121,7 +124,7 @@ class PnP(nn.Module):
         if restarting_su:
             # Restarting creterion proposed by "A Differential Equation for Modeling Nesterov’s Accelerated Gradient Method: Theory and Insights" section 5
             restart_crit_su = -float('inf') 
-            j = 1
+            j = 0
             k_min = 5
 
         for k in tqdm(range(self.nb_itr)):
@@ -142,18 +145,20 @@ class PnP(nn.Module):
                 restart_crit_su_old = restart_crit_su
                 restart_crit_su = torch.mean(torch.abs(x-x_old)).item()
                 if (k>k_min) and (restart_crit_su<restart_crit_su_old):
-                    j = 1
+                    j = 0
                     self.nb_restart_activ += 1
                 else:
                     j += 1
             else:
                 j = k
 
-            if momentum_Nesterov:
+            if Nesterov:
                 if k+r==0:
                     y = x + (x-x_old)
                 else:
                     y = x + j/(j+r)*(x-x_old)
+            elif momentum:
+                y = x + (1-theta)*(x - x_old)
             else:
                 y = x
         return y_denoised
@@ -180,7 +185,9 @@ denoiser_level = hparams.denoiser_level
 lamb = hparams.lamb
 sigma_obs = hparams.sigma_obs
 r = hparams.r
-momentum_Nesterov = hparams.momentum_Nesterov
+theta = hparams.theta
+Nesterov = hparams.Nesterov
+momentum = hparams.momentum
 restarting_su = hparams.restarting_su
 stepsize = hparams.stepsize
 dont_save_images = hparams.dont_save_images
@@ -211,7 +218,7 @@ for i, clean_image_path in enumerate(input_paths):
 
     # Run RED algorithm with or without Nesterov momentum
     with torch.no_grad():
-        model(initial_uv, observation, clean_image, kernel, sigma_obs, lamb, denoiser_level, r, momentum_Nesterov, restarting_su, stepsize)
+        model(initial_uv, observation, clean_image, kernel, sigma_obs, lamb, denoiser_level, theta, r, Nesterov, momentum, restarting_su, stepsize)
 
     psnr_list = model.res['psnr']
     ssim_list = model.res['ssim']
@@ -219,36 +226,51 @@ for i, clean_image_path in enumerate(input_paths):
     if restarting_su:
         print("Number of restarting activation = {}".format(model.nb_restart_activ))
     
+
+    savepth = 'results/'+hparams.dataset_name+"/RED_level_{}_lamb{}".format(denoiser_level, lamb)
+    if Nesterov:
+        savepth = savepth + "_Nesterov_r_{}".format(r)
+    elif momentum:
+        savepth = savepth + "_Heavy_ball_theta_{}".format(theta)
+    if restarting_su:
+        savepth = savepth + "restarting_su"
+    os.makedirs(savepth, exist_ok = True)
+
     if not(dont_save_images):
-        if momentum_Nesterov:
-            savepth = 'results/'+hparams.dataset_name+"/images_GNesterov_RED_r_{}/img_{}/".format(r,i)
-            os.makedirs(savepth, exist_ok = True)
-        else:
-            savepth = 'results/'+hparams.dataset_name+"/images_RED/img_{}/".format(i)
-            os.makedirs(savepth, exist_ok = True)
+        if Nesterov:
+            savepth_img = savepth+"/set_img_{}/".format(i)
+            os.makedirs(savepth_img, exist_ok = True)
         for j in range(len(model.res['image'])):
-            model.res['image'][j].save(savepth + 'result_{}.png'.format(j))
+            model.res['image'][j].save(savepth_img + 'iterations_{}.png'.format(j))
+        
+        model.res['image'][-1].save(savepth + '/restored_img.png')
+        clean_img_uint = util.tensor2uint(clean_image)
+        obs_uint = util.tensor2uint(observation)
+        plt.imsave(savepth + '/clean_img.png', clean_img_uint)
+        plt.imsave(savepth + '/observation.png', obs_uint)
 
         itr_list = range(len(psnr_list))
         plt.clf()
         plt.plot(itr_list, psnr_list, '-', alpha=0.8, linewidth=1.5)
         plt.xlabel('iter')
         plt.ylabel('PSNR')
-        if momentum_Nesterov:
-            plt.savefig('results/'+hparams.dataset_name+'/PSNR_level_{}_lamb{}_r{}_RED_GeneralizedNesterov_img_{}.png'.format(denoiser_level, lamb, r, i))
-        else:
-            plt.savefig('results/'+hparams.dataset_name+'/PSNR_level_{}_lamb{}_RED_img_{}.png'.format(denoiser_level, lamb, r, i))
+        plt.savefig(savepth+'/PSNR_list.png')
+        plt.clf()
+        plt.plot(itr_list, ssim_list, '-', alpha=0.8, linewidth=1.5)
+        plt.xlabel('iter')
+        plt.ylabel('SSIM')
+        plt.savefig(savepth+'/SSIM_list.png')
     
     dict = {
-            'clean_image' : clean_image,
-            'observation' : observation,
+            'clean_image' : clean_image.detach().cpu().numpy().copy(),
+            'observation' : observation.detach().cpu().numpy().copy(),
             'initial_uv' : initial_uv,
-            'kernel' : kernel,
+            'kernel' : kernel.detach().cpu().numpy().copy(),
             'sigma_obs' : sigma_obs,
             'lamb' : lamb,
             'denoiser_level' : denoiser_level,
             'r' : r,
-            'momentum_Nesterov' : momentum_Nesterov,
+            'Nesterov' : Nesterov,
             'restarting_su' : restarting_su,
             'stack_images' : model.res['image'],
             'clean_image_path' : clean_image_path,
@@ -257,12 +279,8 @@ for i, clean_image_path in enumerate(input_paths):
             'ssim_list' : ssim_list,
             'psnr_restored' : psnr_list[-1],
             'ssim_restored' : ssim_list[-1],
-            'restored' : model.res['image'],
+            'restored' : model.res['image'][-1],
             'nb_restart_activ' : model.nb_restart_activ,
         }
-    path_save_dict = 'results/'+hparams.dataset_name+"/dict_RED_level_{}_lamb{}".format(denoiser_level, lamb)
-    if momentum_Nesterov:
-        path_save_dict = path_save_dict + "_GNesterov_r_{}".format(r)
-    if restarting_su:
-        path_save_dict = path_save_dict + "restarting_su"
-    np.save(path_save_dict+"_{}_results".format(i), dict)
+    
+    np.save(savepth+"/dict_results_{}".format(i), dict)
