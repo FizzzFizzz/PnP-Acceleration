@@ -35,6 +35,8 @@ parser.add_argument('--sigma_obs', type=float, default=12.75, help = "Standard v
 parser.add_argument('--dataset_name', type=str, default='set1', help = "Name of the dataset of image to restore")
 parser.add_argument('--kernel_name', type=str, default='levin_6.png', help = "Name of the kernel of blur")
 parser.add_argument('--stepsize', type=float, default=0.02, help = "Stepsize of the gradient descent algorithm")
+parser.add_argument('--dont_save_images', dest='dont_save_images', action='store_true')
+parser.set_defaults(dont_save_images=False)
 hparams = parser.parse_args()
 
 model_path = hparams.model_path
@@ -181,6 +183,7 @@ r = hparams.r
 momentum_Nesterov = hparams.momentum_Nesterov
 restarting_su = hparams.restarting_su
 stepsize = hparams.stepsize
+dont_save_images = hparams.dont_save_images
 
 model = PnP()
 model.to(device)
@@ -210,29 +213,31 @@ for i, clean_image_path in enumerate(input_paths):
     with torch.no_grad():
         model(initial_uv, observation, clean_image, kernel, sigma_obs, lamb, denoiser_level, r, momentum_Nesterov, restarting_su, stepsize)
 
-    if momentum_Nesterov:
-        savepth = 'results/'+hparams.dataset_name+"/images_GNesterov_RED_r_{}/img_{}/".format(r,i)
-        os.makedirs(savepth, exist_ok = True)
-    else:
-        savepth = 'results/'+hparams.dataset_name+"/images_RED/img_{}/".format(i)
-        os.makedirs(savepth, exist_ok = True)
-    for j in range(len(model.res['image'])):
-        model.res['image'][j].save(savepth + 'result_{}.png'.format(j))
-
     psnr_list = model.res['psnr']
     ssim_list = model.res['ssim']
     print("Restored image PSNR = {:.2f}".format(psnr_list[-1]))
     if restarting_su:
         print("Number of restarting activation = {}".format(model.nb_restart_activ))
-    itr_list = range(len(psnr_list))
-    plt.clf()
-    plt.plot(itr_list, psnr_list, '-', alpha=0.8, linewidth=1.5)
-    plt.xlabel('iter')
-    plt.ylabel('PSNR')
-    if momentum_Nesterov:
-        plt.savefig('results/'+hparams.dataset_name+'/PSNR_level_{}_lamb{}_r{}_RED_GeneralizedNesterov_img_{}.png'.format(denoiser_level, lamb, r, i))
-    else:
-        plt.savefig('results/'+hparams.dataset_name+'/PSNR_level_{}_lamb{}_RED_img_{}.png'.format(denoiser_level, lamb, r, i))
+    
+    if not(dont_save_images):
+        if momentum_Nesterov:
+            savepth = 'results/'+hparams.dataset_name+"/images_GNesterov_RED_r_{}/img_{}/".format(r,i)
+            os.makedirs(savepth, exist_ok = True)
+        else:
+            savepth = 'results/'+hparams.dataset_name+"/images_RED/img_{}/".format(i)
+            os.makedirs(savepth, exist_ok = True)
+        for j in range(len(model.res['image'])):
+            model.res['image'][j].save(savepth + 'result_{}.png'.format(j))
+
+        itr_list = range(len(psnr_list))
+        plt.clf()
+        plt.plot(itr_list, psnr_list, '-', alpha=0.8, linewidth=1.5)
+        plt.xlabel('iter')
+        plt.ylabel('PSNR')
+        if momentum_Nesterov:
+            plt.savefig('results/'+hparams.dataset_name+'/PSNR_level_{}_lamb{}_r{}_RED_GeneralizedNesterov_img_{}.png'.format(denoiser_level, lamb, r, i))
+        else:
+            plt.savefig('results/'+hparams.dataset_name+'/PSNR_level_{}_lamb{}_RED_img_{}.png'.format(denoiser_level, lamb, r, i))
     
     dict = {
             'clean_image' : clean_image,
@@ -252,7 +257,12 @@ for i, clean_image_path in enumerate(input_paths):
             'ssim_list' : ssim_list,
             'psnr_restored' : psnr_list[-1],
             'ssim_restored' : ssim_list[-1],
-            'restored' : model.res['image'][j],
+            'restored' : model.res['image'],
             'nb_restart_activ' : model.nb_restart_activ,
         }
-    np.save('results/'+hparams.dataset_name+"/dict_{}_results".format(i), dict)
+    path_save_dict = 'results/'+hparams.dataset_name+"/dict_RED_level_{}_lamb{}".format(denoiser_level, lamb)
+    if momentum_Nesterov:
+        path_save_dict = path_save_dict + "_GNesterov_r_{}".format(r)
+    if restarting_su:
+        path_save_dict = path_save_dict + "restarting_su"
+    np.save(path_save_dict+"_{}_results".format(i), dict)
