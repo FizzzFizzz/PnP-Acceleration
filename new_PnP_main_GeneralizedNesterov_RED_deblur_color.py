@@ -68,13 +68,13 @@ class PnP(nn.Module):
         self.res['ssim'] = [0] * nb_itr
         self.res['image'] = [0]* nb_itr
 
-    def IRL1(self, f, u, v, b2, sigma, lamb, sigma2, k=10, eps=1e-5):
-        for j in range(k):
-            fenzi = lamb * (v-f)/(sigma**2+(v-f)**2)+(v-u-b2)
-            fenmu = lamb * (sigma**2-(v-f)**2)/(sigma**2+(v-f)**2)**2+1
-            v = v - fenzi / fenmu
-            v = torch.clamp(v, min=0, max=255.)
-        return v
+    # def IRL1(self, f, u, v, b2, sigma, lamb, sigma2, k=10, eps=1e-5):
+    #     for j in range(k):
+    #         fenzi = lamb * (v-f)/(sigma**2+(v-f)**2)+(v-u-b2)
+    #         fenmu = lamb * (sigma**2-(v-f)**2)/(sigma**2+(v-f)**2)**2+1
+    #         v = v - fenzi / fenmu
+    #         v = torch.clamp(v, min=0, max=255.)
+    #     return v
 
     def get_psnr_i(self, u, clean, i):
         '''
@@ -87,11 +87,11 @@ class PnP(nn.Module):
         pre_i = torch.clamp(u / 255., 0., 1.)
         self.res['image'][i] = ToPILImage()(pre_i[0])
 
-    def forward(self, kernel, initial_uv, f, clean, sigma=25.5, lamb=690, sigma2=1.0, denoisor_sigma=25,r=0): 
+    def forward(self, kernel, initial_uv, obs, clean, sigma_obs=25.5, lamb=690, sigma2=1.0, denoisor_sigma=25, r=0): 
         # init
-        f *= 255
-        u  = f
-        average = f
+        obs *= 255
+        u  = obs
+        average = obs
         K = kernel
 
         fft_k = deblur.p2o(K, u.shape[-2:])
@@ -109,7 +109,7 @@ class PnP(nn.Module):
             oldx = x
             self.get_psnr_i(torch.clamp(w, min = -0., max =255.), clean, k)
 
-            temp = abs_k * deblur.fftn(y) - fft_kH * deblur.fftn(f)
+            temp = abs_k * deblur.fftn(y) - fft_kH * deblur.fftn(obs)
             temp = torch.real(deblur.ifftn(temp))
 
             t = y/255
@@ -125,34 +125,47 @@ class PnP(nn.Module):
                 y = x + (k)/(k+r)*(x-oldx)
         return w
 
-def plot_psnr(denoiser_level, lamb, sigma,r):
-    device = 'cuda'
+def gen_data(clean_image, sigma, kernel, seed=0):
+    """
+    Generate the degradate observation
+    """
+    fft_k = deblur.p2o(kernel, clean_image.shape[-2:])
+    temp = fft_k * deblur.fftn(clean_image)
+    observation_without_noise = torch.abs(deblur.ifftn(temp))
+
+    # For reproducibility
+    gen = torch.Generator()
+    gen.manual_seed(seed)
+    noise = torch.normal(torch.zeros(observation_without_noise.size()), torch.ones(observation_without_noise.size()), generator = gen)*sigma / 255
+
+    observation = observation_without_noise + noise
+    return observation
+
+def plot_psnr(denoiser_level, lamb, sigma_obs, r):
     model = PnP()
     model.to(device)
     model.net.to(device)
     model.eval()
     model.net.eval()
     
-    # i = 4
     sigma2 = 1.0
 
     clean_image_path = 'CBSD68_cut8/0004.png'
-    kernel_fp = 'utils/kernels/levin_6.png'
-    kernel = util.imread_uint(kernel_fp,1)
+    kernel_path = 'utils/kernels/levin_6.png'
+    kernel = util.imread_uint(kernel_path,1)
     kernel = util.single2tensor3(kernel).unsqueeze(0) / 255.
     kernel = kernel / torch.sum(kernel)
     clean_image = util.imread_uint(clean_image_path, 3)
     clean_image = util.single2tensor3(clean_image).unsqueeze(0) /255.
-    initial_uv, img_L, clean_image = gen_data(clean_image, sigma, kernel)
-    
+    observation = gen_data(clean_image, sigma_obs, kernel)
 
-    initial_uv = initial_uv.to(device)
-    img_L = img_L.to(device)
+    observation = observation.to(device)
+    initial_uv = observation.clone()
     clean_image = clean_image.to(device)
     kernel = kernel.to(device)
 
     with torch.no_grad():
-        model(kernel, initial_uv, img_L, clean_image, sigma, lamb, sigma2, denoiser_level,r)
+        model(kernel, initial_uv, observation, clean_image, sigma_obs, lamb, sigma2, denoiser_level, r)
 
     savepth = 'images_GNesterov_RED_r{}'.format(r)+'/'
     for j in range(len(model.res['image'])):
@@ -169,23 +182,8 @@ def plot_psnr(denoiser_level, lamb, sigma,r):
 
 
 
-def gen_data(img_clean_uint8, sigma, kernel):
-    clean_image = img_clean_uint8
-    img_L = img_clean_uint8
-    fft_k = deblur.p2o(kernel, img_L.shape[-2:])
-    temp = fft_k * deblur.fftn(img_L)
-    img_L = torch.abs(deblur.ifftn(temp))
-    
-    np.random.seed(seed=0)
 
-    noise = np.random.normal(0, 1, img_L.shape)*sigma / 255
-
-    # img_L = np.float32(np.random.poisson(img_L * sigma) / sigma)
-    img_L += noise
-
-    initial_uv = img_L
-    return initial_uv, img_L, clean_image
 
 
 ## RED 
-plot_psnr(denoiser_level = 0.1, lamb = 18, sigma = 12.75, r = 4)
+plot_psnr(denoiser_level = 0.1, lamb = 18, sigma_obs = 12.75, r = 4)

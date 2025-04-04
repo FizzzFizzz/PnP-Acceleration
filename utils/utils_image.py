@@ -668,10 +668,9 @@ def gaussian_window(window_size: int, sigma: float, channels: int):
     return kernel_2d
 
 def calculate_ssim_torch(img1, img2, window_size=11, sigma=1.5, data_range=1.0, size_average=True):
-    # Ensure input is float
-    img1 = img1.type(torch.float32)
-    img2 = img2.type(torch.float32)
-    
+    '''
+        Compute the SSIM metric between img1 and img2 that are suppose to be float entries
+    '''   
     _, channels, _, _ = img1.size()
     window = gaussian_window(window_size, sigma, channels).to(img1.device)
     
