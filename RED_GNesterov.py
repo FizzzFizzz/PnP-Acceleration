@@ -163,6 +163,8 @@ class PnP(nn.Module):
                 y = x
         return y_denoised
 
+
+
 def gen_data(clean_image, sigma, kernel, seed=0):
     """
     Generate the degradate observation
@@ -237,9 +239,8 @@ for i, clean_image_path in enumerate(input_paths):
     os.makedirs(savepth, exist_ok = True)
 
     if not(dont_save_images):
-        if Nesterov:
-            savepth_img = savepth+"/set_img_{}/".format(i)
-            os.makedirs(savepth_img, exist_ok = True)
+        savepth_img = savepth+"/set_img_{}/".format(i)
+        os.makedirs(savepth_img, exist_ok = True)
         for j in range(len(model.res['image'])):
             model.res['image'][j].save(savepth_img + 'iterations_{}.png'.format(j))
         
@@ -262,10 +263,10 @@ for i, clean_image_path in enumerate(input_paths):
         plt.savefig(savepth+'/SSIM_list.png')
     
     dict = {
-            'clean_image' : clean_image.detach().cpu().numpy().copy(),
-            'observation' : observation.detach().cpu().numpy().copy(),
+            'clean_image' : util.tensor2uint(clean_image),
+            'observation' : util.tensor2uint(observation),
             'initial_uv' : initial_uv,
-            'kernel' : kernel.detach().cpu().numpy().copy(),
+            'kernel' : util.tensor2uint(kernel),
             'sigma_obs' : sigma_obs,
             'lamb' : lamb,
             'denoiser_level' : denoiser_level,
